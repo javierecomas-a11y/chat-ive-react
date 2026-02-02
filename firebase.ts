@@ -20,6 +20,7 @@ import {
   uploadBytes, 
   getDownloadURL 
 } from 'firebase/storage';
+import { User } from './types';
 
 const firebaseConfig = {
   projectId: "ejerciciosive",
@@ -34,10 +35,20 @@ const app = initializeApp(firebaseConfig);
 export const db: Firestore = getFirestore(app);
 export const storage = getStorage(app);
 
-export const getSoporteUsers = (callback: (users: any[]) => void) => {
+export const getSoporteUsers = (callback: (users: User[]) => void) => {
   const q = query(collection(db, 'users'), where('tipo', '==', 'soporte'));
   return onSnapshot(q, (snapshot) => {
-    callback(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    callback(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User)));
+  });
+};
+
+export const getAllUsers = (callback: (users: Record<string, User>) => void) => {
+  return onSnapshot(collection(db, 'users'), (snapshot) => {
+    const usersMap: Record<string, User> = {};
+    snapshot.docs.forEach(doc => {
+      usersMap[doc.id] = { id: doc.id, ...doc.data() } as User;
+    });
+    callback(usersMap);
   });
 };
 

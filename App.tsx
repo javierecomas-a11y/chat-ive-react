@@ -7,7 +7,8 @@ import {
   getMessages, 
   assignAgentToChannel,
   sendMessage,
-  uploadAudioFile
+  uploadAudioFile,
+  getAllUsers
 } from './firebase';
 import { User, Channel, Message } from './types';
 import { analyzeConversation, suggestReply } from './geminiService';
@@ -20,6 +21,28 @@ const safeNewDate = (dateStr: string | number) => {
     return new Date(Number(dateStr));
   }
   return new Date(dateStr);
+};
+
+const isSameDay = (d1: Date, d2: Date) => {
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  );
+};
+
+const formatDateSeparator = (date: Date) => {
+  const now = new Date();
+  if (isSameDay(date, now)) return "Hoy";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (isSameDay(date, yesterday)) return "Ayer";
+  
+  return date.toLocaleDateString('es-ES', { 
+    day: 'numeric', 
+    month: 'long', 
+    year: 'numeric' 
+  });
 };
 
 const formatTimeOnly = (date: Date) => {
@@ -79,17 +102,18 @@ const ChatBubble: React.FC<{ message: Message; isMe: boolean }> = ({ message, is
 };
 
 const App: React.FC = () => {
-  // Navigation & UI States
+  // Data States
   const [agents, setAgents] = useState<User[]>([]);
+  const [usersMap, setUsersMap] = useState<Record<string, User>>({});
   const [selectedAgent, setSelectedAgent] = useState<User | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [unassignedChannels, setUnassignedChannels] = useState<Channel[]>([]);
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  
+  // UI States
   const [newMessage, setNewMessage] = useState('');
   const [viewUnassigned, setViewUnassigned] = useState(false);
-  
-  // Platform Detection
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -108,16 +132,32 @@ const App: React.FC = () => {
   const timerRef = useRef<number | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
+  // Helper to get partner name
+  const getPartnerName = (channel: Channel) => {
+    if (!channel || !channel.usuarios) return "Usuario Desconocido";
+    const partnerId = channel.usuarios.find(id => id !== selectedAgent?.id);
+    if (!partnerId) return "Canal sin contacto";
+    return usersMap[partnerId]?.nombre || `Usuario (${partnerId.slice(-4)})`;
+  };
+
+  const getPartnerImage = (channel: Channel) => {
+    const partnerId = channel.usuarios.find(id => id !== selectedAgent?.id);
+    return partnerId ? usersMap[partnerId]?.image_url : null;
+  };
+
   // Initial Load
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 1024);
     window.addEventListener('resize', handleResize);
     const unsubAgents = getSoporteUsers(setAgents);
     const unsubUnassigned = getUnassignedChannels(setUnassignedChannels);
+    const unsubUsers = getAllUsers(setUsersMap);
+    
     return () => { 
       window.removeEventListener('resize', handleResize);
       unsubAgents(); 
-      unsubUnassigned(); 
+      unsubUnassigned();
+      unsubUsers();
     };
   }, []);
 
@@ -265,18 +305,6 @@ const App: React.FC = () => {
                     {isMobile || window.innerWidth > 1024 ? 'Cerrar Sesión' : <i className="fa-solid fa-right-from-bracket"></i>}
                   </button>
                 </div>
-                
-                {!isMobile && (
-                  <div className="hidden lg:block">
-                     <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100">
-                        <p className="text-[9px] text-gray-400 font-black uppercase tracking-widest mb-2">Resumen de Hoy</p>
-                        <div className="flex justify-between items-center text-xs font-bold text-gray-700">
-                           <span>Tickets atendidos</span>
-                           <span className="text-indigo-600">12</span>
-                        </div>
-                     </div>
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -327,8 +355,13 @@ const App: React.FC = () => {
                     <span className="text-[10px] font-black text-indigo-500 uppercase">#{ch.id.slice(-5)}</span>
                     <span className="text-[9px] text-gray-400 font-bold">{formatFriendlyDate(ch.updated)}</span>
                   </div>
-                  <p className="text-sm font-bold text-gray-800 capitalize">{ch.tipo}</p>
-                  <p className="text-[10px] text-gray-400 mt-1 truncate">Última actividad hace unos momentos</p>
+                  <div className="flex items-center">
+                    {getPartnerImage(ch) && (
+                      <img src={getPartnerImage(ch)!} className="w-6 h-6 rounded-full mr-2 object-cover border border-gray-100" alt="" />
+                    )}
+                    <p className="text-sm font-bold text-gray-800 capitalize truncate">{getPartnerName(ch)}</p>
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-1 truncate">Tipo de consulta: {ch.tipo}</p>
                 </button>
               ))
             )}
@@ -348,11 +381,15 @@ const App: React.FC = () => {
                       <i className="fa-solid fa-chevron-left text-lg"></i>
                     </button>
                   )}
-                  <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center mr-3 flex-shrink-0 shadow-inner">
-                    <i className="fa-solid fa-hashtag"></i>
-                  </div>
+                  {getPartnerImage(selectedChannel) ? (
+                    <img src={getPartnerImage(selectedChannel)!} className="w-10 h-10 rounded-xl mr-3 flex-shrink-0 shadow-inner object-cover border border-gray-100" alt="" />
+                  ) : (
+                    <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center mr-3 flex-shrink-0 shadow-inner">
+                      <i className="fa-solid fa-user"></i>
+                    </div>
+                  )}
                   <div className="overflow-hidden">
-                    <h2 className="font-black text-gray-800 tracking-tight text-sm sm:text-base truncate">Canal {selectedChannel.tipo}</h2>
+                    <h2 className="font-black text-gray-800 tracking-tight text-sm sm:text-base truncate">{getPartnerName(selectedChannel)}</h2>
                     <p className="text-[10px] text-green-500 font-black uppercase tracking-widest flex items-center">
                       <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-2 animate-pulse"></span> #{selectedChannel.id.slice(-6)}
                     </p>
@@ -396,9 +433,30 @@ const App: React.FC = () => {
                     <p className="font-black uppercase tracking-widest text-xs">Esperando el primer mensaje...</p>
                   </div>
                 ) : (
-                  messages.map(m => (
-                    <ChatBubble key={m.id} message={m} isMe={m.origen === selectedAgent?.id} />
-                  ))
+                  messages.map((m, index) => {
+                    const date = safeNewDate(m.timestamp);
+                    const prevMessage = messages[index - 1];
+                    const prevDate = prevMessage ? safeNewDate(prevMessage.timestamp) : null;
+                    const showSeparator = !prevDate || !isSameDay(date, prevDate);
+
+                    return (
+                      <React.Fragment key={m.id}>
+                        {showSeparator && (
+                          <div className="flex items-center justify-center my-10 relative">
+                            <div className="absolute inset-0 flex items-center" aria-hidden="true">
+                              <div className="w-full border-t border-gray-100"></div>
+                            </div>
+                            <div className="relative flex justify-center">
+                              <span className="px-5 py-1.5 bg-gray-50 text-[9px] font-black uppercase tracking-[0.2em] text-gray-400 rounded-full border border-gray-100 shadow-sm backdrop-blur-sm">
+                                {formatDateSeparator(date)}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                        <ChatBubble message={m} isMe={m.origen === selectedAgent?.id} />
+                      </React.Fragment>
+                    );
+                  })
                 )}
                 <div ref={chatEndRef} />
               </div>
@@ -409,7 +467,7 @@ const App: React.FC = () => {
                     <div className="flex items-center justify-between bg-red-50 p-4 rounded-3xl border-2 border-red-100 animate-pulse">
                       <div className="flex items-center text-red-600 font-black text-xs uppercase tracking-widest">
                         <span className="w-2.5 h-2.5 bg-red-600 rounded-full mr-3 animate-ping"></span>
-                        Gravando: {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
+                        Grabando: {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
                       </div>
                       <button onClick={stopRecording} className="px-6 py-2 bg-red-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all">
                         Enviar Audio
@@ -453,7 +511,7 @@ const App: React.FC = () => {
                   )}
                   
                   <div className="flex items-center justify-between mt-4 px-2">
-                    <p className="hidden lg:block text-[9px] text-gray-300 font-bold uppercase tracking-[0.2em]">Operador ID: {selectedAgent?.id.slice(0,8)}</p>
+                    <p className="hidden lg:block text-[9px] text-gray-300 font-bold uppercase tracking-[0.2em]">Operador: {selectedAgent?.nombre}</p>
                     <div className="flex items-center justify-between w-full lg:w-auto lg:space-x-8">
                       <button 
                         onClick={isRecording ? stopRecording : startRecording} 
@@ -481,8 +539,6 @@ const App: React.FC = () => {
           )}
         </main>
       )}
-
-      {/* Overlays & Modals */}
 
       {/* Tickets No Asignados Overlay */}
       {viewUnassigned && (
@@ -513,7 +569,8 @@ const App: React.FC = () => {
                     </span>
                     <span className="text-[10px] text-gray-400 font-mono">#{ch.id.slice(-6)}</span>
                   </div>
-                  <p className="text-base font-bold text-gray-800 mb-6 capitalize">Solicitud de {ch.tipo}</p>
+                  <p className="text-base font-bold text-gray-800 mb-2 capitalize">{getPartnerName(ch)}</p>
+                  <p className="text-xs text-gray-500 mb-6">Solicitud: {ch.tipo}</p>
                   <button 
                     onClick={async () => {
                       if(selectedAgent) {
@@ -533,7 +590,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Authentication Modal / Bottom-Sheet */}
+      {/* Authentication Modal */}
       {authPendingAgent && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-0 sm:p-4 animate-fade-in">
           <div className={`bg-white w-full sm:max-w-sm p-8 flex flex-col items-center shadow-2xl transition-all duration-300 ${isMobile ? 'rounded-t-[3rem] animate-slide-up pb-10' : 'rounded-[3rem]'}`}>
