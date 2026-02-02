@@ -1,0 +1,8 @@
+{
+  "name": "Support Chat Dashboard",
+  "description": "A professional support chat management system for managing channels, assigning agents, and utilizing AI-powered message analysis.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
