@@ -601,12 +601,44 @@ const App: React.FC = () => {
               </div>
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-center p-12 bg-[#FAFAFA]">
-              <div className="w-28 h-28 bg-white rounded-[2.5rem] shadow-2xl shadow-gray-200/50 flex items-center justify-center mb-10 rotate-3 hover:rotate-0 transition-all duration-500 group">
+            <div className="flex-1 flex flex-col items-center justify-center text-center p-8 sm:p-12 bg-[#FAFAFA] relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-indigo-600 to-indigo-500"></div>
+              
+              <div className="w-32 h-32 bg-white rounded-[2.5rem] shadow-2xl shadow-indigo-100/50 flex items-center justify-center mb-10 rotate-3 hover:rotate-0 transition-all duration-500 group relative">
                 <i className="fa-solid fa-headset text-5xl text-indigo-600 group-hover:scale-110 transition-transform"></i>
+                {unassignedChannels.length > 0 && (
+                  <div className="absolute -top-3 -right-3 w-10 h-10 bg-red-600 text-white rounded-full flex items-center justify-center text-sm font-black border-4 border-white animate-bounce shadow-lg">
+                    {unassignedChannels.length}
+                  </div>
+                )}
               </div>
-              <h3 className="text-2xl font-black text-gray-800 uppercase tracking-tighter">Bandeja de Atención</h3>
-              <p className="max-w-xs text-sm mt-4 text-gray-400 font-medium leading-relaxed">Selecciona una conversación para gestionar la ayuda al cliente.</p>
+              
+              <h3 className="text-2xl sm:text-3xl font-black text-gray-800 uppercase tracking-tighter mb-4">Bandeja de Atención</h3>
+              
+              <div className="bg-white/60 backdrop-blur-md border border-white p-6 rounded-[2rem] shadow-xl max-w-sm w-full transition-all hover:shadow-2xl hover:bg-white">
+                <p className="text-[10px] font-black text-indigo-400 uppercase tracking-[0.2em] mb-3">Estado del Sistema</p>
+                {unassignedChannels.length > 0 ? (
+                  <div className="flex flex-col items-center">
+                    <p className="text-sm text-gray-600 font-medium leading-relaxed mb-4">
+                      Hay <span className="text-indigo-600 font-black">{unassignedChannels.length}</span> tickets esperando ser atendidos.
+                    </p>
+                    <button 
+                      onClick={() => setViewUnassigned(true)}
+                      className="px-6 py-2.5 bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-indigo-700 transition-all active:scale-95"
+                    >
+                      Ver Tickets Pendientes
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400 font-medium leading-relaxed">
+                    ¡Gran trabajo! No hay tickets pendientes en este momento.
+                  </p>
+                )}
+              </div>
+              
+              <p className="max-w-xs text-[10px] mt-8 text-gray-300 font-bold uppercase tracking-widest">
+                Selecciona una conversación activa para comenzar
+              </p>
             </div>
           )}
         </main>
