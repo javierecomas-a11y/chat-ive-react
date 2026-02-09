@@ -20,6 +20,9 @@ const safeNewDate = (dateStr: string | number) => {
   if (typeof dateStr === 'string' && /^\d+$/.test(dateStr)) {
     return new Date(Number(dateStr));
   }
+  if (dateStr && typeof (dateStr as any).toMillis === 'function') {
+    return new Date((dateStr as any).toMillis());
+  }
   return new Date(dateStr);
 };
 
@@ -54,7 +57,7 @@ const formatTimeOnly = (date: Date) => {
 };
 
 const formatFriendlyDate = (dateStr: string) => {
-  if (!dateStr) return '';
+  if (!dateStr) return 'Reciente';
   const date = safeNewDate(dateStr);
   const now = new Date();
   const isToday = date.toDateString() === now.toDateString();
@@ -69,6 +72,7 @@ const formatFriendlyDate = (dateStr: string) => {
 
 const ChatBubble: React.FC<{ message: Message; isMe: boolean }> = ({ message, isMe }) => {
   const date = safeNewDate(message.timestamp);
+  const isAudio = message.tipo === 'audio' || (message.resurl && message.resurl.length > 0);
   
   return (
     <div className={`flex flex-col mb-4 ${isMe ? 'items-end' : 'items-start animate-fade-in-left'}`}>
@@ -77,7 +81,7 @@ const ChatBubble: React.FC<{ message: Message; isMe: boolean }> = ({ message, is
           ? 'bg-indigo-600 text-white rounded-tr-none' 
           : 'bg-white text-gray-800 rounded-tl-none border border-gray-100'
       }`}>
-        {message.tipo === 'audio' || message.resurl ? (
+        {isAudio ? (
           <div className="flex flex-col space-y-2 min-w-[220px]">
             {message.mensaje && <p className="text-sm mb-1">{message.mensaje}</p>}
             <div className={`flex items-center rounded-xl p-2 ${isMe ? 'bg-indigo-500' : 'bg-gray-50'}`}>
@@ -102,6 +106,13 @@ const ChatBubble: React.FC<{ message: Message; isMe: boolean }> = ({ message, is
 };
 
 const App: React.FC = () => {
+  // Master Password State
+  const [isMasterAuthenticated, setIsMasterAuthenticated] = useState(() => {
+    return sessionStorage.getItem('master_auth') === 'true';
+  });
+  const [masterPassInput, setMasterPassInput] = useState('');
+  const [masterError, setMasterError] = useState(false);
+
   // Data States
   const [agents, setAgents] = useState<User[]>([]);
   const [usersMap, setUsersMap] = useState<Record<string, User>>({});
@@ -132,21 +143,44 @@ const App: React.FC = () => {
   const timerRef = useRef<number | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Helper to get partner name
+  // Filtrado de tickets por tipo de agente
+  const filteredUnassigned = useMemo(() => {
+    if (!selectedAgent) return [];
+    const technicalSupportCode = 'Ms9w06Xk68Rb4QdVx4WH';
+    
+    if (selectedAgent.tipo === 'soporteTecnico') {
+      // Soporte técnico solo ve el canal específico
+      return unassignedChannels.filter(ch => ch.id === technicalSupportCode);
+    } else {
+      // Soporte general ve todos los demás
+      return unassignedChannels.filter(ch => ch.id !== technicalSupportCode);
+    }
+  }, [unassignedChannels, selectedAgent]);
+
+  // Helper to get partner name (Client)
   const getPartnerName = (channel: Channel) => {
-    if (!channel || !channel.usuarios) return "Usuario Desconocido";
-    const partnerId = channel.usuarios.find(id => id !== selectedAgent?.id);
-    if (!partnerId) return "Canal sin contacto";
-    return usersMap[partnerId]?.nombre || `Usuario (${partnerId.slice(-4)})`;
+    if (!channel) return "Desconocido";
+    if (usersMap[channel.id]) return usersMap[channel.id].nombre;
+    if (!channel.usuarios || channel.usuarios.length === 0) {
+      return `Cliente #${channel.id.slice(-5)}`;
+    }
+    const partnerId = selectedAgent 
+      ? (channel.usuarios.find(id => id !== selectedAgent.id && id !== 'npQOEYLQPkNw5GXpvyLl') || channel.usuarios[0])
+      : channel.usuarios.find(id => id !== 'npQOEYLQPkNw5GXpvyLl') || channel.usuarios[0];
+    
+    if (usersMap[partnerId]) return usersMap[partnerId].nombre;
+    return `Cliente #${partnerId.slice(-5)}`;
   };
 
   const getPartnerImage = (channel: Channel) => {
-    const partnerId = channel.usuarios.find(id => id !== selectedAgent?.id);
+    if (!channel || !channel.usuarios) return null;
+    const partnerId = channel.usuarios.find(id => id !== selectedAgent?.id && id !== 'npQOEYLQPkNw5GXpvyLl') || channel.usuarios[0];
     return partnerId ? usersMap[partnerId]?.image_url : null;
   };
 
   // Initial Load
   useEffect(() => {
+    if (!isMasterAuthenticated) return;
     const handleResize = () => setIsMobile(window.innerWidth < 1024);
     window.addEventListener('resize', handleResize);
     const unsubAgents = getSoporteUsers(setAgents);
@@ -159,17 +193,18 @@ const App: React.FC = () => {
       unsubUnassigned();
       unsubUsers();
     };
-  }, []);
+  }, [isMasterAuthenticated]);
 
   // Real-time Data Sync
   useEffect(() => {
     if (!selectedAgent) return;
     const unsub = getChannelsByAgent(selectedAgent.id, (data) => {
-      let active = data.filter(c => c.updated);
-      if (selectedAgent.id === 'uJ22Sf8OCPDcEVv5y3n1') {
-        active = active.filter(c => c.usuarios.includes('9710'));
-      }
-      setChannels(active);
+      const sortedChannels = [...data].sort((a, b) => {
+        const timeA = Number(a.updated) || 0;
+        const timeB = Number(b.updated) || 0;
+        return timeB - timeA;
+      });
+      setChannels(sortedChannels);
     });
     return () => unsub();
   }, [selectedAgent]);
@@ -185,6 +220,17 @@ const App: React.FC = () => {
   }, [messages, aiSummary]);
 
   // Handlers
+  const handleMasterAuth = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (masterPassInput === '123456') {
+      setIsMasterAuthenticated(true);
+      sessionStorage.setItem('master_auth', 'true');
+    } else {
+      setMasterError(true);
+      setMasterPassInput('');
+    }
+  };
+
   const handleAuth = (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!authPendingAgent) return;
@@ -234,10 +280,11 @@ const App: React.FC = () => {
     setIsUploading(true);
     try {
       const ts = Date.now();
-      const fileName = `${ts}.mp4`;
+      const fileName = `audio_${ts}.mp4`;
       const url = await uploadAudioFile(blob, fileName);
       await sendMessage(selectedChannel.id, selectedAgent.id, '', url, fileName, 'audio');
     } catch (error) {
+      console.error(error);
       alert("Error al subir audio.");
     } finally {
       setIsUploading(false);
@@ -252,6 +299,40 @@ const App: React.FC = () => {
     }
   };
 
+  // Master Authentication Screen
+  if (!isMasterAuthenticated) {
+    return (
+      <div className="fixed inset-0 bg-gradient-to-br from-indigo-900 via-slate-900 to-black flex items-center justify-center p-6 z-[999]">
+        <div className="bg-white/10 backdrop-blur-xl p-10 rounded-[3rem] border border-white/10 w-full max-w-md shadow-2xl flex flex-col items-center">
+          <div className="w-20 h-20 bg-indigo-600 rounded-[2rem] flex items-center justify-center mb-8 shadow-xl shadow-indigo-500/20">
+            <i className="fa-solid fa-lock text-3xl text-white"></i>
+          </div>
+          <h1 className="text-2xl font-black text-white mb-2 tracking-tighter">ACCESO RESTRINGIDO</h1>
+          <p className="text-indigo-200/60 text-xs font-bold uppercase tracking-widest mb-8 text-center">Introduce el código maestro para continuar</p>
+          
+          <form onSubmit={handleMasterAuth} className="w-full space-y-4">
+            <input 
+              autoFocus
+              type="password"
+              value={masterPassInput}
+              onChange={(e) => { setMasterPassInput(e.target.value); setMasterError(false); }}
+              placeholder="••••••"
+              className={`w-full bg-white/5 border-2 rounded-2xl px-6 py-4 text-center font-black text-3xl tracking-[0.5em] text-white focus:outline-none transition-all ${
+                masterError ? 'border-red-500 animate-shake' : 'border-white/10 focus:border-indigo-500'
+              }`}
+            />
+            <button 
+              type="submit"
+              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-2xl transition-all uppercase tracking-widest text-xs shadow-lg shadow-indigo-500/20 active:scale-95"
+            >
+              Desbloquear Sistema
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   // Mobile Views Logic
   const showChatMobile = isMobile && selectedChannel && !viewUnassigned;
   const showChannelsMobile = isMobile && selectedAgent && !selectedChannel && !viewUnassigned;
@@ -260,7 +341,7 @@ const App: React.FC = () => {
   return (
     <div className="flex h-[100svh] w-full bg-gray-50 font-sans overflow-hidden select-none">
       
-      {/* Column 1: Agentes (Desktop) / Mobile: Initial Screen */}
+      {/* Column 1: Agentes */}
       {(showAgentsMobile || !isMobile) && (
         <aside className={`${isMobile ? 'w-full' : 'w-20 lg:w-72'} bg-white border-r border-gray-100 flex flex-col transition-all duration-300 z-10`}>
           <div className="p-6 h-20 flex items-center border-b border-gray-50">
@@ -311,7 +392,7 @@ const App: React.FC = () => {
         </aside>
       )}
 
-      {/* Column 2: Canales (Desktop) / Mobile: Middle Screen */}
+      {/* Column 2: Canales */}
       {(showChannelsMobile || (!isMobile && selectedAgent)) && (
         <section className={`${isMobile ? 'w-full' : 'w-80'} bg-[#FDFDFD] border-r border-gray-100 flex flex-col animate-fade-in`}>
           <header className="h-20 border-b border-gray-50 px-6 flex items-center justify-between">
@@ -326,9 +407,9 @@ const App: React.FC = () => {
               className={`p-2.5 rounded-xl transition-all relative ${viewUnassigned ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-400 hover:text-indigo-600'}`}
             >
               <i className="fa-solid fa-bell-concierge"></i>
-              {unassignedChannels.length > 0 && (
+              {filteredUnassigned.length > 0 && (
                 <span className="absolute -top-1 -right-1 bg-red-600 text-white text-[9px] w-4 h-4 rounded-full flex items-center justify-center border-2 border-white animate-bounce">
-                  {unassignedChannels.length}
+                  {filteredUnassigned.length}
                 </span>
               )}
             </button>
@@ -338,7 +419,7 @@ const App: React.FC = () => {
             {channels.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center opacity-20 p-8">
                 <i className="fa-solid fa-inbox text-5xl mb-4"></i>
-                <p className="font-black uppercase tracking-tighter">Sin chats asignados</p>
+                <p className="font-black uppercase tracking-tighter">Sin chats activos</p>
               </div>
             ) : (
               channels.map(ch => (
@@ -361,7 +442,7 @@ const App: React.FC = () => {
                     )}
                     <p className="text-sm font-bold text-gray-800 capitalize truncate">{getPartnerName(ch)}</p>
                   </div>
-                  <p className="text-[10px] text-gray-400 mt-1 truncate">Tipo de consulta: {ch.tipo}</p>
+                  <p className="text-[10px] text-gray-400 mt-1 truncate">Motivo: {ch.tipo}</p>
                 </button>
               ))
             )}
@@ -369,7 +450,7 @@ const App: React.FC = () => {
         </section>
       )}
 
-      {/* Column 3: Chat Main (Desktop) / Mobile: Chat View */}
+      {/* Column 3: Chat Main */}
       {(showChatMobile || !isMobile) && (
         <main className={`flex-1 flex flex-col bg-white relative ${isMobile && !selectedChannel ? 'hidden' : ''} animate-fade-in`}>
           {selectedChannel ? (
@@ -391,7 +472,7 @@ const App: React.FC = () => {
                   <div className="overflow-hidden">
                     <h2 className="font-black text-gray-800 tracking-tight text-sm sm:text-base truncate">{getPartnerName(selectedChannel)}</h2>
                     <p className="text-[10px] text-green-500 font-black uppercase tracking-widest flex items-center">
-                      <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-2 animate-pulse"></span> #{selectedChannel.id.slice(-6)}
+                      <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-2 animate-pulse"></span> ONLINE
                     </p>
                   </div>
                 </div>
@@ -430,7 +511,7 @@ const App: React.FC = () => {
                 {messages.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center opacity-30">
                     <i className="fa-solid fa-message-dots text-6xl mb-6 text-gray-200"></i>
-                    <p className="font-black uppercase tracking-widest text-xs">Esperando el primer mensaje...</p>
+                    <p className="font-black uppercase tracking-widest text-xs">Sin mensajes en este canal</p>
                   </div>
                 ) : (
                   messages.map((m, index) => {
@@ -453,7 +534,7 @@ const App: React.FC = () => {
                             </div>
                           </div>
                         )}
-                        <ChatBubble message={m} isMe={m.origen === selectedAgent?.id} />
+                        <ChatBubble message={m} isMe={m.origen === (selectedAgent?.id || '')} />
                       </React.Fragment>
                     );
                   })
@@ -467,10 +548,10 @@ const App: React.FC = () => {
                     <div className="flex items-center justify-between bg-red-50 p-4 rounded-3xl border-2 border-red-100 animate-pulse">
                       <div className="flex items-center text-red-600 font-black text-xs uppercase tracking-widest">
                         <span className="w-2.5 h-2.5 bg-red-600 rounded-full mr-3 animate-ping"></span>
-                        Grabando: {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
+                        REC: {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
                       </div>
                       <button onClick={stopRecording} className="px-6 py-2 bg-red-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all">
-                        Enviar Audio
+                        Enviar
                       </button>
                     </div>
                   ) : (
@@ -478,7 +559,7 @@ const App: React.FC = () => {
                       <textarea 
                         value={newMessage}
                         onChange={(e) => setNewMessage(e.target.value)}
-                        placeholder="Respuesta del agente..."
+                        placeholder="Responder al cliente..."
                         className="w-full bg-gray-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white rounded-[1.5rem] px-5 py-4 pr-32 text-sm focus:outline-none transition-all resize-none min-h-[56px] max-h-40 shadow-inner custom-scrollbar"
                         onKeyDown={(e) => { 
                           if(e.key === 'Enter' && !e.shiftKey && !isMobile) { 
@@ -488,6 +569,13 @@ const App: React.FC = () => {
                         }}
                       />
                       <div className="absolute right-3 bottom-3 flex space-x-2">
+                        <button 
+                          type="button" 
+                          onClick={startRecording}
+                          className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                        >
+                          <i className="fa-solid fa-microphone"></i>
+                        </button>
                         <button 
                           type="button" 
                           onClick={async () => {
@@ -501,7 +589,7 @@ const App: React.FC = () => {
                         </button>
                         <button 
                           type="submit"
-                          disabled={!newMessage.trim() || isUploading}
+                          disabled={!newMessage.trim() && !isUploading}
                           className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg shadow-indigo-100 hover:scale-105 active:scale-95 transition-all disabled:opacity-30"
                         >
                           <i className={`fa-solid ${isUploading ? 'fa-spinner fa-spin' : 'fa-paper-plane'} text-xs`}></i>
@@ -509,22 +597,6 @@ const App: React.FC = () => {
                       </div>
                     </form>
                   )}
-                  
-                  <div className="flex items-center justify-between mt-4 px-2">
-                    <p className="hidden lg:block text-[9px] text-gray-300 font-bold uppercase tracking-[0.2em]">Operador: {selectedAgent?.nombre}</p>
-                    <div className="flex items-center justify-between w-full lg:w-auto lg:space-x-8">
-                      <button 
-                        onClick={isRecording ? stopRecording : startRecording} 
-                        className={`p-3 transition-all active:scale-90 ${isRecording ? 'text-red-500 scale-125' : 'text-gray-400 hover:text-indigo-600'}`}
-                      >
-                        <i className="fa-solid fa-microphone text-xl"></i>
-                      </button>
-                      <div className="flex space-x-6">
-                        <button className="p-3 text-gray-400 hover:text-indigo-600 active:scale-90"><i className="fa-solid fa-image text-xl"></i></button>
-                        <button className="p-3 text-gray-400 hover:text-indigo-600 active:scale-90"><i className="fa-solid fa-paperclip text-xl"></i></button>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
             </>
@@ -533,14 +605,14 @@ const App: React.FC = () => {
               <div className="w-28 h-28 bg-white rounded-[2.5rem] shadow-2xl shadow-gray-200/50 flex items-center justify-center mb-10 rotate-3 hover:rotate-0 transition-all duration-500 group">
                 <i className="fa-solid fa-headset text-5xl text-indigo-600 group-hover:scale-110 transition-transform"></i>
               </div>
-              <h3 className="text-2xl font-black text-gray-800 uppercase tracking-tighter">Centro de Ayuda</h3>
-              <p className="max-w-xs text-sm mt-4 text-gray-400 font-medium leading-relaxed">Selecciona un canal de la lista para comenzar a interactuar con el cliente.</p>
+              <h3 className="text-2xl font-black text-gray-800 uppercase tracking-tighter">Bandeja de Atención</h3>
+              <p className="max-w-xs text-sm mt-4 text-gray-400 font-medium leading-relaxed">Selecciona una conversación para gestionar la ayuda al cliente.</p>
             </div>
           )}
         </main>
       )}
 
-      {/* Tickets No Asignados Overlay */}
+      {/* Overlay Screens (Unassigned, Auth) */}
       {viewUnassigned && (
         <div className={`fixed inset-0 z-40 flex flex-col bg-white animate-fade-in ${!isMobile ? 'left-auto right-0 w-[420px] border-l border-gray-100 shadow-2xl' : ''}`}>
           <header className="h-20 border-b border-gray-100 px-6 flex items-center justify-between bg-white sticky top-0 z-10">
@@ -548,29 +620,32 @@ const App: React.FC = () => {
               <button onClick={() => setViewUnassigned(false)} className="w-10 h-10 flex items-center justify-center text-gray-400 mr-2 hover:bg-gray-50 rounded-xl transition-all">
                 <i className="fa-solid fa-xmark text-xl"></i>
               </button>
-              <h4 className="font-black text-xs text-gray-800 uppercase tracking-widest">Bandeja de Entrada</h4>
+              <h4 className="font-black text-xs text-gray-800 uppercase tracking-widest">Nuevos Tickets</h4>
             </div>
-            <span className="bg-red-500 text-white text-[10px] font-black px-3 py-1 rounded-full shadow-lg shadow-red-100">{unassignedChannels.length}</span>
+            <span className="bg-red-500 text-white text-[10px] font-black px-3 py-1 rounded-full shadow-lg shadow-red-100">{filteredUnassigned.length}</span>
           </header>
           
           <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50 custom-scrollbar">
-            {unassignedChannels.length === 0 ? (
+            {filteredUnassigned.length === 0 ? (
               <div className="text-center py-20 opacity-20">
                 <i className="fa-solid fa-circle-check text-5xl mb-4"></i>
-                <p className="font-black text-sm uppercase">Sin tickets pendientes</p>
+                <p className="font-black text-sm uppercase">No hay tickets pendientes</p>
               </div>
             ) : (
-              unassignedChannels.map(ch => (
+              filteredUnassigned.map(ch => (
                 <div key={ch.id} className="p-6 bg-white rounded-[2rem] shadow-sm border border-gray-100 hover:shadow-md transition-all group">
                   <div className="flex justify-between items-center mb-4">
                     <span className="text-[10px] font-black text-red-500 flex items-center px-3 py-1 bg-red-50 rounded-full">
                       <span className="w-2 h-2 bg-red-500 rounded-full mr-2 animate-pulse"></span>
-                      ALTA PRIORIDAD
+                      {(ch.usuarios && ch.usuarios.includes('npQOEYLQPkNw5GXpvyLl')) ? 'PENDIENTE' : 'NUEVO'}
                     </span>
                     <span className="text-[10px] text-gray-400 font-mono">#{ch.id.slice(-6)}</span>
                   </div>
                   <p className="text-base font-bold text-gray-800 mb-2 capitalize">{getPartnerName(ch)}</p>
-                  <p className="text-xs text-gray-500 mb-6">Solicitud: {ch.tipo}</p>
+                  <div className="flex justify-between items-center mb-6">
+                    <p className="text-xs text-gray-500">Motivo: {ch.tipo || 'Consulta General'}</p>
+                    <p className="text-[10px] text-gray-400">{formatFriendlyDate(ch.updated)}</p>
+                  </div>
                   <button 
                     onClick={async () => {
                       if(selectedAgent) {
@@ -581,7 +656,7 @@ const App: React.FC = () => {
                     }}
                     className="w-full py-4 bg-gray-900 text-white text-[10px] font-black rounded-2xl hover:bg-indigo-600 transition-all uppercase tracking-[0.15em] active:scale-95 shadow-lg shadow-gray-100"
                   >
-                    Tomar Ticket Ahora
+                    Atender Ticket
                   </button>
                 </div>
               ))
@@ -590,7 +665,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Authentication Modal */}
       {authPendingAgent && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-0 sm:p-4 animate-fade-in">
           <div className={`bg-white w-full sm:max-w-sm p-8 flex flex-col items-center shadow-2xl transition-all duration-300 ${isMobile ? 'rounded-t-[3rem] animate-slide-up pb-10' : 'rounded-[3rem]'}`}>
@@ -598,7 +672,7 @@ const App: React.FC = () => {
             
             <img src={authPendingAgent.image_url} className="w-24 h-24 rounded-[2rem] border-4 border-white shadow-2xl mb-6 object-cover" alt="" />
             <h3 className="text-xl font-black text-gray-800 tracking-tight">{authPendingAgent.nombre}</h3>
-            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.2em] mb-8">Confirmación de Identidad</p>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.2em] mb-8">Confirmar Agente</p>
             
             <form onSubmit={handleAuth} className="w-full space-y-6">
               <div className="relative">
@@ -607,25 +681,25 @@ const App: React.FC = () => {
                   type="password"
                   value={passwordInput}
                   onChange={(e) => { setPasswordInput(e.target.value); setAuthError(false); }}
-                  placeholder="••••••"
+                  placeholder="••••"
                   className={`w-full bg-gray-50 border-2 rounded-2xl px-6 py-4 text-center font-black text-2xl tracking-[0.5em] focus:outline-none transition-all ${
                     authError ? 'border-red-200 bg-red-50 text-red-600' : 'border-transparent focus:border-indigo-200 focus:bg-white text-indigo-600'
                   }`}
                 />
-                {authError && <p className="text-[10px] text-red-500 font-black text-center uppercase mt-4 animate-shake">Contraseña Incorrecta</p>}
+                {authError && <p className="text-[10px] text-red-500 font-black text-center uppercase mt-4 animate-shake">Error de validación</p>}
               </div>
               <button 
                 type="submit" 
                 className="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl shadow-xl shadow-indigo-100 hover:scale-[1.02] active:scale-95 transition-all text-[11px] uppercase tracking-[0.2em]"
               >
-                Acceder al Panel
+                Ingresar al Panel
               </button>
               <button 
                 type="button" 
                 onClick={() => { setAuthPendingAgent(null); setPasswordInput(''); }} 
                 className="w-full text-gray-400 text-[10px] font-black uppercase py-2 tracking-widest hover:text-gray-600"
               >
-                Cancelar
+                Volver
               </button>
             </form>
           </div>
@@ -649,6 +723,10 @@ const App: React.FC = () => {
           0%, 100% { transform: translateX(0); }
           25% { transform: translateX(-6px); }
           75% { transform: translateX(6px); }
+        }
+        @keyframes fade-in {
+          from { opacity: 0; }
+          to { opacity: 1; }
         }
         .animate-fade-in-left { animation: fade-in-left 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         .animate-fade-in-down { animation: fade-in-down 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }

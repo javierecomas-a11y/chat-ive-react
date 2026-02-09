@@ -1,5 +1,5 @@
 {
-  "name": "Support Chat Dashboard",
+  "name": "IVE Support Chat",
   "description": "A professional support chat management system for managing channels, assigning agents, and utilizing AI-powered message analysis.",
   "requestFramePermissions": [
     "camera",
