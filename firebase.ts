@@ -2,10 +2,7 @@
 import { initializeApp } from 'firebase/app';
 import { 
   getFirestore, 
-  collection, 
-  query, 
   where, 
-  onSnapshot, 
   doc, 
   updateDoc, 
   setDoc,
@@ -13,7 +10,12 @@ import {
   arrayUnion,
   arrayRemove,
   Firestore,
-  Timestamp
+  Timestamp,
+  collection,
+  onSnapshot,
+  getDocs,
+  query,
+  limit  
 } from 'firebase/firestore';
 import { 
   getStorage, 
@@ -80,7 +82,7 @@ const normalizeTime = (val: any): number => {
   return isNaN(date) ? 0 : date;
 };
 
-export const getUnassignedChannels = (callback: (channels: any[]) => void) => {
+export const getUnassignedChannelsTmp = (callback: (channels: any[]) => void) => {
   return onSnapshot(collection(db, 'channels'), (snapshot) => {
     const unassigned = snapshot.docs
       .map(doc => ({ id: doc.id, ...doc.data() }))
@@ -94,6 +96,45 @@ export const getUnassignedChannels = (callback: (channels: any[]) => void) => {
         const timeB = normalizeTime(b.updated);
         return timeB - timeA;
       });
+    callback(unassigned);
+  });
+};
+
+export const getUnassignedChannels = (
+  callback: (channels: any[]) => void
+) => {
+  return onSnapshot(collection(db, 'channels'), async (snapshot) => {
+
+    const candidates = snapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter((c: any) => {
+        if (!c.usuarios || !Array.isArray(c.usuarios)) return true;
+        if (c.usuarios.includes(PLACEHOLDER_AGENT_ID)) return true;
+        return c.usuarios.length < 2;
+      });
+
+    // Verificar subcolección messages
+    const filteredWithMessages = await Promise.all(
+      candidates.map(async (channel: any) => {
+        const messagesRef = collection(db, 'channels', channel.id, 'messages');
+        const q = query(messagesRef, limit(1));
+        const snap = await getDocs(q);
+
+        if (!snap.empty) {
+          return channel;
+        }
+        return null;
+      })
+    );
+
+    const unassigned = filteredWithMessages
+      .filter(Boolean)
+      .sort((a: any, b: any) => {
+        const timeA = normalizeTime(a.updated);
+        const timeB = normalizeTime(b.updated);
+        return timeB - timeA;
+      });
+
     callback(unassigned);
   });
 };
